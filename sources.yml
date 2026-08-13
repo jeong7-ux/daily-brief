@@ -1,0 +1,63 @@
+# 수집 대상 정의. 여기만 고치면 워크플로 수정 없이 소스를 바꿀 수 있습니다.
+
+settings:
+  # 몇 시간 이내에 올라온 항목까지 수집할지 (크론이 밀릴 수 있어 26시간으로 여유를 둠)
+  lookback_hours: 26
+  # 텔레그램 메시지에 섹션당 최대 몇 건까지 넣을지 (마크다운 파일에는 전부 저장됨)
+  telegram_max_per_section: 8
+
+sections:
+  - name: "AI·LLM 연구"
+    emoji: "🤖"
+    feeds:
+      - type: arxiv
+        label: "arXiv"
+        categories: [cs.AI, cs.CL, cs.LG]
+        max_items: 60
+        # arXiv는 제출 마감·공지 스케줄 때문에 하루 이상 지연됩니다.
+        # 주말에는 공지가 없어 월요일 아침을 커버하려면 72시간이 필요합니다.
+        # (중복은 state/seen.json이 걸러주므로 창을 넓혀도 같은 논문이 두 번 오지 않습니다.)
+        lookback_hours: 72
+        # 아래 키워드가 제목/초록에 하나라도 있어야 채택. 비우면 전체 통과.
+        keywords:
+          - agent
+          - LLM
+          - large language model
+          - retrieval
+          - RAG
+          - reasoning
+          - fine-tun
+          - multimodal
+          - benchmark
+
+  - name: "개발·테크 뉴스"
+    emoji: "💻"
+    feeds:
+      - type: rss
+        label: "Hacker News"
+        url: "https://hnrss.org/frontpage"
+        max_items: 10
+      - type: rss
+        label: "GeekNews"
+        url: "https://feeds.feedburner.com/geeknews-feed"
+        max_items: 10
+      - type: rss
+        label: "TechCrunch"
+        url: "https://techcrunch.com/feed/"
+        max_items: 8
+
+  - name: "국내 뉴스"
+    emoji: "📰"
+    feeds:
+      - type: rss
+        label: "연합뉴스"
+        url: "https://www.yna.co.kr/rss/news.xml"
+        max_items: 10
+      - type: rss
+        label: "한겨레"
+        url: "https://www.hani.co.kr/rss/"
+        max_items: 8
+      - type: rss
+        label: "경향신문"
+        url: "https://www.khan.co.kr/rss/rssdata/total_news.xml"
+        max_items: 8
