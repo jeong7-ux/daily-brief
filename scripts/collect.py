@@ -31,6 +31,8 @@ STATE_FILE = ROOT / "state" / "seen.json"
 USER_AGENT = "daily-brief-bot/1.0 (+https://github.com/jeong7-ux/daily-brief)"
 ARXIV_API = "http://export.arxiv.org/api/query"
 ARXIV_RSS = "https://rss.arxiv.org/rss/"
+DEEPL_API = "https://api-free.deepl.com/v2/translate"
+DEEPL_BATCH = 50  # DeepL이 한 요청에 받는 최대 텍스트 수
 TELEGRAM_CHUNK = 3500  # 텔레그램 한도는 4096자. 여유를 둠.
 SEEN_RETENTION_DAYS = 30
 RETRY_STATUSES = {429, 500, 502, 503, 504}
@@ -39,6 +41,7 @@ WEEKDAYS = ["월", "화", "수", "목", "금", "토", "일"]
 
 TAG_RE = re.compile(r"<[^>]+>")
 WS_RE = re.compile(r"\s+")
+HANGUL_RE = re.compile(r"[가-힣]")
 
 
 # --------------------------------------------------------------------------- 유틸
@@ -308,6 +311,90 @@ def collect_section(section: dict, default_lookback: int, seen: dict) -> list[di
     return items
 
 
+# --------------------------------------------------------------------------- 번역
+
+
+def needs_translation(text: str) -> bool:
+    """한글이 거의 없으면 번역 대상으로 봅니다.
+
+    국내 언론사 기사는 이미 한글이라 그대로 두고, arXiv와 해외 테크 뉴스만
+    골라냅니다. 제목에 한글이 한두 자 섞인 경우(따옴표 안 인용 등)까지
+    영문으로 오판하지 않도록 두 자를 기준으로 잡았습니다.
+    """
+    return len(HANGUL_RE.findall(text)) < 2
+
+
+def translate_batch(texts: list[str], api_key: str) -> list[str] | None:
+    """DeepL로 한 번에 번역합니다. 실패하면 None을 돌려 원문을 유지합니다."""
+    try:
+        resp = requests.post(
+            DEEPL_API,
+            headers={
+                "Authorization": f"DeepL-Auth-Key {api_key}",
+                "User-Agent": USER_AGENT,
+            },
+            data=[("text", t) for t in texts]
+            + [("source_lang", "EN"), ("target_lang", "KO")],
+            timeout=60,
+        )
+    except requests.RequestException as exc:
+        log(f"  ! 번역 요청 실패: {exc}")
+        return None
+
+    if resp.status_code == 456:
+        log("  ! DeepL 월 무료 한도(50만 자) 소진 — 원문으로 발송합니다")
+        return None
+    if resp.status_code == 403:
+        log("  ! DeepL 인증 실패(403) — 키를 확인하세요. 원문으로 발송합니다")
+        return None
+    if not resp.ok:
+        log(f"  ! 번역 실패: HTTP {resp.status_code} {resp.text[:200]}")
+        return None
+
+    try:
+        translations = resp.json()["translations"]
+    except (ValueError, KeyError) as exc:
+        log(f"  ! 번역 응답 해석 실패: {exc}")
+        return None
+
+    # 개수가 어긋나면 항목과 번역문이 밀려 엉뚱하게 짝지어집니다.
+    if len(translations) != len(texts):
+        log(f"  ! 번역 개수 불일치 ({len(translations)} != {len(texts)}) — 원문 유지")
+        return None
+
+    return [t["text"] for t in translations]
+
+
+def translate_titles(sections: list[tuple[dict, list[dict]]], api_key: str) -> None:
+    """영문 제목에 title_ko를 채웁니다. 실패해도 발송은 그대로 진행됩니다."""
+    targets = [
+        item
+        for _, items in sections
+        for item in items
+        if needs_translation(item["title"])
+    ]
+    if not targets:
+        log("번역할 영문 제목이 없습니다")
+        return
+
+    chars = sum(len(i["title"]) for i in targets)
+    log(f"번역 대상: {len(targets)}건 / {chars:,}자")
+
+    done = 0
+    for start in range(0, len(targets), DEEPL_BATCH):
+        chunk = targets[start : start + DEEPL_BATCH]
+        result = translate_batch([i["title"] for i in chunk], api_key)
+        if result is None:
+            break  # 한 배치가 실패하면 나머지도 실패할 가능성이 높습니다.
+        for item, ko in zip(chunk, result):
+            # 번역기가 원문을 그대로 돌려주면 병기할 이유가 없습니다.
+            if ko.strip() and ko.strip() != item["title"].strip():
+                item["title_ko"] = ko.strip()
+                done += 1
+
+    log(f"  번역 완료: {done}건")
+
+
 # --------------------------------------------------------------------------- 렌더링
 
 
@@ -335,7 +422,10 @@ def render_markdown(sections: list[tuple[dict, list[dict]]], now: datetime) -> s
             continue
         for item in items:
             when = item["published"].astimezone(KST).strftime("%m/%d %H:%M") if item["published"] else "시각 미상"
-            lines.append(f"- [{item['title']}]({item['link']})")
+            title_ko = item.get("title_ko")
+            lines.append(f"- [{title_ko or item['title']}]({item['link']})")
+            if title_ko:
+                lines.append(f"  원문: {item['title']}")
             lines.append(f"  `{item['source']}` · {when}")
             if item["summary"]:
                 lines.append(f"  > {item['summary']}")
@@ -354,8 +444,14 @@ def render_telegram(sections: list[tuple[dict, list[dict]]], now: datetime, limi
             parts.append("")
             continue
         for item in items[:limit]:
-            parts.append(f"• <a href=\"{esc(item['link'], quote=True)}\">{esc(item['title'])}</a>")
-            parts.append(f"  <i>{esc(item['source'])}</i>")
+            title_ko = item.get("title_ko")
+            shown = esc(title_ko or item["title"])
+            parts.append(f"• <a href=\"{esc(item['link'], quote=True)}\">{shown}</a>")
+            # 번역된 항목은 원문을 출처와 한 줄에 붙여 줄 수를 늘리지 않습니다.
+            if title_ko:
+                parts.append(f"  <i>{esc(item['title'])} · {esc(item['source'])}</i>")
+            else:
+                parts.append(f"  <i>{esc(item['source'])}</i>")
         if len(items) > limit:
             parts.append(f"  <i>… 외 {len(items) - limit}건</i>")
         parts.append("")
@@ -431,6 +527,13 @@ def main() -> int:
     if total == 0:
         log("새 항목이 없어 종료합니다.")
         return 0
+
+    # 번역은 있으면 좋은 기능입니다. 실패해도 원문 그대로 발송을 계속합니다.
+    deepl_key = os.environ.get("DEEPL_API_KEY", "").strip()
+    if deepl_key:
+        translate_titles(sections, deepl_key)
+    else:
+        log("DEEPL_API_KEY가 없어 번역을 건너뜁니다")
 
     markdown = render_markdown(sections, now)
     message = render_telegram(sections, now, tg_limit)

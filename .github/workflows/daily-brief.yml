@@ -42,6 +42,8 @@ jobs:
         env:
           TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
           TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+          # 없으면 번역만 건너뛰고 원문으로 발송합니다.
+          DEEPL_API_KEY: ${{ secrets.DEEPL_API_KEY }}
           DRY_RUN: ${{ inputs.dry_run && '1' || '0' }}
         run: python scripts/collect.py
 

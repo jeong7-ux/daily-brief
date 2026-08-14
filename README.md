@@ -9,8 +9,41 @@ GitHub Actions (21:20 / 09:20 UTC = 06:20 / 18:20 KST)
        ├─ arXiv API      → cs.AI / cs.CL / cs.LG 신규 논문 (키워드 필터)
        ├─ RSS            → Hacker News, GeekNews, TechCrunch
        ├─ RSS            → 연합뉴스, 한겨레, 경향신문, 매일경제, 한국경제
+       ├─ DeepL          → 영문 제목을 한글로 번역 (원문 병기)
        ├─ briefs/YYYY-MM-DD-HHMM.md 로 저장 후 커밋
        └─ 텔레그램 봇 API로 전송
+```
+
+## 번역
+
+영문 제목만 DeepL로 번역하고 원문을 함께 보여줍니다. 국내 언론사 기사는 이미
+한글이라 건너뜁니다(제목에 한글이 2자 미만이면 번역 대상으로 판단).
+
+```
+• 협업적 대화 결과 달성을 위한 다중 LLM 에이전트 시스템의 동적 거버넌스
+  Dynamic Governance of Multi-LLM Agent Systems… · arXiv cs.AI
+```
+
+`DEEPL_API_KEY` 시크릿이 없으면 번역만 건너뛰고 원문 그대로 발송합니다.
+번역이 실패해도(한도 소진, 인증 오류, 네트워크) 브리프 발송은 계속됩니다 —
+있으면 좋은 기능이지 발송을 막을 이유는 아니기 때문입니다.
+
+| 상황 | 동작 |
+|---|---|
+| 키 없음 | 번역 생략, 원문 발송 |
+| HTTP 456 (월 한도 소진) | 로그에 남기고 원문 발송 |
+| HTTP 403 (키 오류) | 로그에 남기고 원문 발송 |
+| 번역 개수 불일치 | 항목이 밀려 짝이 어긋나므로 전부 원문 유지 |
+
+DeepL Free는 **월 50만 자**가 무료입니다. 현재 사용량은 1회 실행당 약 6,400자,
+하루 2회 기준 월 38만 자 수준입니다. 여유가 부족하면 `sources.yml`의
+arXiv `max_items`를 줄이는 게 가장 효과가 큽니다.
+
+사용량 확인:
+
+```bash
+curl -H "Authorization: DeepL-Auth-Key $DEEPL_API_KEY" \
+  https://api-free.deepl.com/v2/usage
 ```
 
 ## 최초 설정
@@ -46,6 +79,7 @@ GitHub Actions (21:20 / 09:20 UTC = 06:20 / 18:20 KST)
 ```bash
 gh secret set TELEGRAM_BOT_TOKEN --repo jeong7-ux/daily-brief
 gh secret set TELEGRAM_CHAT_ID  --repo jeong7-ux/daily-brief
+gh secret set DEEPL_API_KEY     --repo jeong7-ux/daily-brief   # 선택 — 없으면 번역만 생략
 ```
 
 각각 실행하면 값을 물어봅니다. 웹에서 하려면
