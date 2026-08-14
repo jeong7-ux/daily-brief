@@ -30,6 +30,7 @@ STATE_FILE = ROOT / "state" / "seen.json"
 
 USER_AGENT = "daily-brief-bot/1.0 (+https://github.com/jeong7-ux/daily-brief)"
 ARXIV_API = "http://export.arxiv.org/api/query"
+ARXIV_RSS = "https://rss.arxiv.org/rss/"
 TELEGRAM_CHUNK = 3500  # 텔레그램 한도는 4096자. 여유를 둠.
 SEEN_RETENTION_DAYS = 30
 RETRY_STATUSES = {429, 500, 502, 503, 504}
@@ -57,6 +58,17 @@ def strip_html(text: str, limit: int = 220) -> str:
     return clean
 
 
+def canonical_link(link: str) -> str:
+    """arXiv 링크에서 버전 접미사를 떼어 seen.json 키를 통일합니다.
+
+    API는 .../abs/2608.12313v1을, RSS는 .../abs/2608.12313을 줍니다.
+    두 경로를 번갈아 쓰므로 정규화하지 않으면 같은 논문이 두 번 발송됩니다.
+    """
+    if "arxiv.org/abs/" in link:
+        return re.sub(r"v\d+$", "", link)
+    return link
+
+
 def entry_time(entry) -> datetime | None:
     """피드마다 제각각인 발행 시각 필드를 UTC datetime으로 통일합니다."""
     for field in ("published_parsed", "updated_parsed", "created_parsed"):
@@ -76,8 +88,11 @@ def load_seen() -> dict[str, str]:
         return {}
     try:
         with STATE_FILE.open(encoding="utf-8") as fh:
-            return json.load(fh)
-    except (json.JSONDecodeError, OSError):
+            raw = json.load(fh)
+        # 링크 정규화를 도입하기 전에 쌓인 키는 버전 접미사가 붙어 있습니다.
+        # 읽는 시점에 맞춰 주지 않으면 이미 보낸 논문이 한 번 더 발송됩니다.
+        return {canonical_link(url): day for url, day in raw.items()}
+    except (json.JSONDecodeError, OSError, AttributeError):
         log("  ! seen.json을 읽지 못해 빈 상태로 시작합니다")
         return {}
 
@@ -157,7 +172,7 @@ def collect_rss(feed_cfg: dict, cutoff: datetime, seen: dict) -> list[dict]:
     items, skipped_old, skipped_seen = [], 0, 0
 
     for entry in parsed.entries:
-        link = getattr(entry, "link", "")
+        link = canonical_link(getattr(entry, "link", ""))
         if not link:
             continue
         if link in seen:
@@ -191,27 +206,49 @@ def collect_rss(feed_cfg: dict, cutoff: datetime, seen: dict) -> list[dict]:
     return items
 
 
+def arxiv_via_api(categories: list[str], max_items: int, label: str):
+    """제출 시각순 정렬을 주지만, 간헐적으로 429를 던집니다."""
+    params = {
+        "search_query": " OR ".join(f"cat:{cat}" for cat in categories),
+        "sortBy": "submittedDate",
+        "sortOrder": "descending",
+        "max_results": max_items,
+    }
+    resp = http_get(ARXIV_API, params=params, timeout=45, label=f"{label} API")
+    return feedparser.parse(resp.content) if resp is not None else None
+
+
+def arxiv_via_rss(categories: list[str], label: str):
+    """공지 기준 피드. 한 번의 요청으로 여러 분야를 주고 throttle이 훨씬 덜합니다.
+
+    대신 발행 시각이 날짜 단위(00:00 -0400)라 시간 필터가 거칠어집니다.
+    중복은 seen.json이 막아주므로 실무상 문제가 없습니다.
+    """
+    url = ARXIV_RSS + "+".join(categories)
+    resp = http_get(url, timeout=45, label=f"{label} RSS")
+    return feedparser.parse(resp.content) if resp is not None else None
+
+
 def collect_arxiv(feed_cfg: dict, cutoff: datetime, seen: dict) -> list[dict]:
     label = feed_cfg.get("label", "arXiv")
     categories = feed_cfg.get("categories", ["cs.AI"])
-    query = " OR ".join(f"cat:{cat}" for cat in categories)
-    params = {
-        "search_query": query,
-        "sortBy": "submittedDate",
-        "sortOrder": "descending",
-        "max_results": feed_cfg.get("max_items", 40),
-    }
+    max_items = feed_cfg.get("max_items", 40)
 
-    resp = http_get(ARXIV_API, params=params, timeout=45, label=label)
-    if resp is None:
+    parsed = arxiv_via_api(categories, max_items, label)
+    if parsed is None or not parsed.entries:
+        log(f"  · {label}: API 실패 — RSS로 대체")
+        parsed = arxiv_via_rss(categories, label)
+    if parsed is None:
         return []
 
-    parsed = feedparser.parse(resp.content)
     keywords = feed_cfg.get("keywords", [])
     items, skipped_old, skipped_seen = [], 0, 0
 
     for entry in parsed.entries:
-        link = getattr(entry, "link", "")
+        if len(items) >= max_items:
+            break
+
+        link = canonical_link(getattr(entry, "link", ""))
         if not link:
             continue
         if link in seen:
