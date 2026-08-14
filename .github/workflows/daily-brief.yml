@@ -2,9 +2,10 @@ name: Daily Brief
 
 on:
   schedule:
-    # 21:20 UTC = 06:20 KST. GitHub 스케줄은 부하에 따라 5~30분 밀리므로
-    # 목표 도착 시각(06:30 KST)보다 10분 앞당겨 잡았습니다.
-    - cron: '20 21 * * *'
+    # 12시간 주기. GitHub 스케줄은 부하에 따라 5~30분 밀리므로
+    # 목표 도착 시각보다 10분씩 앞당겨 잡았습니다.
+    - cron: '20 21 * * *'   # 21:20 UTC = 06:20 KST (아침)
+    - cron: '20 9 * * *'    # 09:20 UTC = 18:20 KST (저녁)
   workflow_dispatch:
     inputs:
       dry_run:
@@ -56,7 +57,7 @@ jobs:
             echo "변경 사항 없음 - 커밋 생략"
             exit 0
           fi
-          git commit -m "brief: $(date -u -d '+9 hours' +%Y-%m-%d)"
+          git commit -m "brief: $(date -u -d '+9 hours' +'%Y-%m-%d %H:%M') KST"
           # 스케줄이 밀려 다른 실행과 겹쳤을 때를 대비해 rebase 후 push
           git pull --rebase --autostash origin "${GITHUB_REF_NAME}"
           git push
@@ -73,7 +74,7 @@ jobs:
             exit 0
           fi
           RUN_URL="${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}"
-          TEXT=$(printf '⚠️ 모닝 브리프 수집 실패\n%s' "$RUN_URL")
+          TEXT=$(printf '⚠️ 브리프 수집 실패\n%s' "$RUN_URL")
           curl -sS -X POST \
             "https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/sendMessage" \
             -d "chat_id=${TELEGRAM_CHAT_ID}" \

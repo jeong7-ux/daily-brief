@@ -1,8 +1,9 @@
 # 수집 대상 정의. 여기만 고치면 워크플로 수정 없이 소스를 바꿀 수 있습니다.
 
 settings:
-  # 몇 시간 이내에 올라온 항목까지 수집할지 (크론이 밀릴 수 있어 26시간으로 여유를 둠)
-  lookback_hours: 26
+  # 몇 시간 이내에 올라온 항목까지 수집할지.
+  # 12시간마다 실행하므로 12 + 여유 2 = 14. 크론이 밀려도 구멍이 안 생깁니다.
+  lookback_hours: 14
   # 텔레그램 메시지에 섹션당 최대 몇 건까지 넣을지 (마크다운 파일에는 전부 저장됨)
   telegram_max_per_section: 8
 
@@ -60,4 +61,12 @@ sections:
       - type: rss
         label: "경향신문"
         url: "https://www.khan.co.kr/rss/rssdata/total_news.xml"
+        max_items: 8
+      - type: rss
+        label: "매일경제"
+        url: "https://www.mk.co.kr/rss/30000001/"
+        max_items: 8
+      - type: rss
+        label: "한국경제"
+        url: "https://www.hankyung.com/feed/all-news"
         max_items: 8

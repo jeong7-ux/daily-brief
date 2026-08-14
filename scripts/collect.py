@@ -32,6 +32,8 @@ USER_AGENT = "daily-brief-bot/1.0 (+https://github.com/jeong7-ux/daily-brief)"
 ARXIV_API = "http://export.arxiv.org/api/query"
 TELEGRAM_CHUNK = 3500  # 텔레그램 한도는 4096자. 여유를 둠.
 SEEN_RETENTION_DAYS = 30
+RETRY_STATUSES = {429, 500, 502, 503, 504}
+MAX_ATTEMPTS = 3
 WEEKDAYS = ["월", "화", "수", "목", "금", "토", "일"]
 
 TAG_RE = re.compile(r"<[^>]+>")
@@ -100,23 +102,51 @@ def matches_keywords(text: str, keywords: list[str]) -> bool:
 # --------------------------------------------------------------------------- 수집
 
 
-def parse_feed(url: str) -> feedparser.FeedParserDict | None:
+def http_get(url: str, *, params: dict | None = None, timeout: int = 30, label: str = ""):
+    """일시적 실패(429·5xx)는 지수 백오프로 재시도합니다.
+
+    arXiv가 짧은 간격의 연속 요청에 429를 돌려주는 일이 있는데,
+    재시도가 없으면 그 한 번으로 섹션 전체가 비어버립니다.
+    """
+    delay = 5
+    for attempt in range(MAX_ATTEMPTS):
+        last = attempt == MAX_ATTEMPTS - 1
+        try:
+            resp = requests.get(
+                url, params=params, headers={"User-Agent": USER_AGENT}, timeout=timeout
+            )
+            if resp.ok:
+                return resp
+            if resp.status_code not in RETRY_STATUSES or last:
+                log(f"  ! {label} 요청 실패: HTTP {resp.status_code}")
+                return None
+            reason = f"HTTP {resp.status_code}"
+        except requests.RequestException as exc:
+            if last:
+                log(f"  ! {label} 요청 실패: {exc}")
+                return None
+            reason = exc.__class__.__name__
+
+        log(f"  · {label} {reason} — {delay}초 후 재시도")
+        time.sleep(delay)
+        delay *= 3
+    return None
+
+
+def parse_feed(url: str, label: str = "") -> feedparser.FeedParserDict | None:
     """feedparser에 직접 URL을 주지 않고 requests로 받아옵니다.
 
     일부 언론사가 기본 UA를 차단하고, 타임아웃 제어도 이쪽이 확실합니다.
     """
-    try:
-        resp = requests.get(url, headers={"User-Agent": USER_AGENT}, timeout=30)
-        resp.raise_for_status()
-    except requests.RequestException as exc:
-        log(f"  ! 요청 실패: {exc}")
+    resp = http_get(url, timeout=30, label=label)
+    if resp is None:
         return None
     return feedparser.parse(resp.content)
 
 
 def collect_rss(feed_cfg: dict, cutoff: datetime, seen: dict) -> list[dict]:
     label = feed_cfg.get("label", feed_cfg["url"])
-    parsed = parse_feed(feed_cfg["url"])
+    parsed = parse_feed(feed_cfg["url"], label=label)
     if parsed is None:
         return []
     if parsed.bozo and not parsed.entries:
@@ -172,13 +202,8 @@ def collect_arxiv(feed_cfg: dict, cutoff: datetime, seen: dict) -> list[dict]:
         "max_results": feed_cfg.get("max_items", 40),
     }
 
-    try:
-        resp = requests.get(
-            ARXIV_API, params=params, headers={"User-Agent": USER_AGENT}, timeout=45
-        )
-        resp.raise_for_status()
-    except requests.RequestException as exc:
-        log(f"  ! {label} 요청 실패: {exc}")
+    resp = http_get(ARXIV_API, params=params, timeout=45, label=label)
+    if resp is None:
         return []
 
     parsed = feedparser.parse(resp.content)
@@ -253,8 +278,13 @@ def format_date_header(now: datetime) -> str:
     return f"{now.strftime('%Y-%m-%d')} ({WEEKDAYS[now.weekday()]})"
 
 
+def brief_label(now: datetime) -> str:
+    """하루 두 번(아침·저녁) 돌기 때문에 어느 회차인지 제목에 드러냅니다."""
+    return "모닝" if now.hour < 12 else "이브닝"
+
+
 def render_markdown(sections: list[tuple[dict, list[dict]]], now: datetime) -> str:
-    lines = [f"# 📅 {format_date_header(now)} 모닝 브리프", ""]
+    lines = [f"# 📅 {format_date_header(now)} {brief_label(now)} 브리프", ""]
     total = sum(len(items) for _, items in sections)
     lines.append(f"> 총 {total}건 · 생성 {now.strftime('%Y-%m-%d %H:%M')} KST")
     lines.append("")
@@ -278,7 +308,7 @@ def render_markdown(sections: list[tuple[dict, list[dict]]], now: datetime) -> s
 
 def render_telegram(sections: list[tuple[dict, list[dict]]], now: datetime, limit: int) -> str:
     esc = html.escape
-    parts = [f"<b>📅 {format_date_header(now)} 모닝 브리프</b>", ""]
+    parts = [f"<b>📅 {format_date_header(now)} {brief_label(now)} 브리프</b>", ""]
 
     for section, items in sections:
         parts.append(f"<b>{section.get('emoji', '•')} {section['name']}</b>")
@@ -374,7 +404,8 @@ def main() -> int:
         return 0
 
     BRIEF_DIR.mkdir(parents=True, exist_ok=True)
-    brief_path = BRIEF_DIR / f"{now.strftime('%Y-%m-%d')}.md"
+    # 하루 두 번 돌기 때문에 시각까지 넣습니다. 날짜만 쓰면 저녁 실행이 아침 것을 덮어씁니다.
+    brief_path = BRIEF_DIR / f"{now.strftime('%Y-%m-%d-%H%M')}.md"
     brief_path.write_text(markdown, encoding="utf-8")
     log(f"저장: {brief_path.relative_to(ROOT)}")
 

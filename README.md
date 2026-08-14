@@ -1,15 +1,15 @@
 # 📅 Daily Brief
 
-매일 아침 6시 30분(KST), RSS 뉴스와 arXiv 신규 논문을 모아 **텔레그램으로** 보냅니다.
-GitHub Actions에서 돌기 때문에 PC를 켜 둘 필요가 없고, public 저장소라 실행 비용도 없습니다.
+하루 두 번(아침 06:20, 저녁 18:20 KST), RSS 뉴스와 arXiv 신규 논문을 모아
+**텔레그램으로** 보냅니다. GitHub Actions에서 돌기 때문에 PC를 켜 둘 필요가 없습니다.
 
 ```
-GitHub Actions (매일 21:20 UTC = 06:20 KST)
+GitHub Actions (21:20 / 09:20 UTC = 06:20 / 18:20 KST)
   └─ scripts/collect.py
        ├─ arXiv API      → cs.AI / cs.CL / cs.LG 신규 논문 (키워드 필터)
        ├─ RSS            → Hacker News, GeekNews, TechCrunch
-       ├─ RSS            → 연합뉴스, 한겨레, 경향신문
-       ├─ briefs/YYYY-MM-DD.md 로 저장 후 커밋
+       ├─ RSS            → 연합뉴스, 한겨레, 경향신문, 매일경제, 한국경제
+       ├─ briefs/YYYY-MM-DD-HHMM.md 로 저장 후 커밋
        └─ 텔레그램 봇 API로 전송
 ```
 
@@ -108,7 +108,7 @@ DRY_RUN=1 .venv/Scripts/python scripts/collect.py
 ## 알아둘 점
 
 - **정시 도착은 보장되지 않습니다.** GitHub Actions 스케줄은 부하에 따라 5~30분 밀립니다.
-  06:20 KST에 시작하도록 잡아 두었지만 06:20~06:50 사이에 도착합니다.
+  06:20 / 18:20 KST에 시작하도록 잡아 두었지만 실제 도착은 그로부터 30분 이내입니다.
 - **public 저장소는 60일간 활동이 없으면 스케줄이 자동 정지됩니다.**
   이 워크플로는 매일 브리프를 커밋하므로 자동으로 해결됩니다.
 - **수집 실패 시 텔레그램으로 알림이 옵니다.** 조용히 멈추는 상황을 막기 위한 장치입니다.
