@@ -510,10 +510,18 @@
           제외하는데, 판별 기준은 제목에 한글이 2자 미만인지입니다 — 인용부호 안에
           한글이 한두 자 섞인 해외 기사를 한글로 오판하지 않기 위해서입니다.
         </p>
-        <div class="tech"><span>DeepL API Free</span><span>50건 단위 배치</span><span>월 50만 자 무료</span></div>
-        <pre class="code"><span class="c"># 79건을 한 번의 요청으로 — 항목마다 호출하면 느리고 한도도 빨리 닳습니다</span>
-data=[(<span class="k">"text"</span>, t) <span class="k">for</span> t <span class="k">in</span> texts] + [(<span class="k">"target_lang"</span>, <span class="k">"KO"</span>)]</pre>
+        <div class="tech"><span>DeepL API Free</span><span>50건 단위 배치</span><span>실행 전 한도 조회</span><span>보이는 것 우선</span></div>
+        <pre class="code"><span class="c"># 실행 전에 실제 사용량을 조회해 예산을 계산합니다 (추정이 아니라 실측)</span>
+남은 가용 = 한도 − 예약분(10%) − 사용량      <span class="c"># 절대 상한</span>
+배분      = 남은 가용 ÷ 이번 달 남은 실행 횟수  <span class="c"># 실행당 균등 배분</span></pre>
         <p style="margin:13px 0 0;color:var(--ink-2);font-size:14.5px;max-width:60ch">
+          텔레그램에는 섹션당 8건만 나가므로 실제로 읽는 영문은 <b>11건(879자)</b>뿐입니다.
+          수집한 영문 전체를 번역하면 76%가 보이지도 않는 곳에 쓰입니다. 그래서
+          보이는 항목은 <b>절대 상한 안에서 항상</b>, 보관본에만 남는 항목은
+          <b>균등 배분 안에서만</b> 번역합니다 — 한도가 찰수록 배분이 제목 한 줄보다
+          작아져, 나누지 않으면 정작 읽는 부분이 번역되지 않습니다.
+        </p>
+        <p style="margin:11px 0 0;color:var(--ink-2);font-size:14.5px;max-width:60ch">
           번역은 있으면 좋은 기능이지 발송을 막을 이유가 아닙니다. 키가 없든,
           한도가 소진됐든(<code>456</code>), 인증이 틀렸든(<code>403</code>) 원문 그대로 발송을 계속합니다.
           <b>번역 개수가 요청과 다르면 배치 전체를 원문으로 되돌립니다</b> — 한 칸이라도 밀리면
@@ -724,11 +732,13 @@ data=[(<span class="k">"text"</span>, t) <span class="k">for</span> t <span clas
         </ul>
       </div>
       <div class="branch" style="border-left:3px solid var(--accent)">
-        <h4 style="color:var(--accent)">번역 실패 — 발송은 계속</h4>
+        <h4 style="color:var(--accent)">번역 부족 — 발송은 계속</h4>
         <ul>
-          <li>키 없음 · 한도 소진 · 인증 오류 · 네트워크 오류 모두 원문 유지</li>
+          <li>여유 충분 → 보이는 항목 + 보관용 전부</li>
+          <li>여유 부족 → 보이는 항목만</li>
+          <li>한도 소진 · 키 없음 · 인증 오류 → 전부 원문</li>
           <li>개수가 어긋나면 배치 전체를 원문으로 되돌림</li>
-          <li>워크플로는 성공으로 끝남</li>
+          <li>어느 경우든 워크플로는 성공으로 끝남</li>
         </ul>
       </div>
     </div>
@@ -758,9 +768,27 @@ data=[(<span class="k">"text"</span>, t) <span class="k">for</span> t <span clas
 
     <p class="note">
       번역 자체는 1.3초로, 실행 시간 대부분은 수집과 arXiv 재시도 대기입니다.
-      국내 뉴스 42건은 이미 한글이라 번역을 거치지 않습니다. 번역 문자 수가
-      6,148자라는 것은 하루 2회 기준 월 약 37만 자 — DeepL 무료 한도 50만 자의 74%입니다.
-      여유를 늘리려면 <code>sources.yml</code>의 arXiv <code>max_items</code>를 줄이는 게 가장 효과가 큽니다.
+      국내 뉴스 42건은 이미 한글이라 번역을 거치지 않습니다.
+    </p>
+
+    <div class="t-scroll" style="margin-top:4px">
+      <table>
+        <thead>
+          <tr><th>시나리오</th><th class="n">실행당</th><th class="n">월 환산</th><th class="n">한도 대비</th></tr>
+        </thead>
+        <tbody>
+          <tr><td>보이는 항목만 (<code>translate_hidden: false</code>)</td><td class="n">879자</td><td class="n">52,740</td><td class="n">11%</td></tr>
+          <tr><td>보관본까지 전부 — arXiv API 정상</td><td class="n">3,594자</td><td class="n">215,640</td><td class="n">43%</td></tr>
+          <tr><td>보관본까지 전부 — arXiv RSS 대체</td><td class="n">6,148자</td><td class="n">368,880</td><td class="n">74%</td></tr>
+          <tr><td><b>예산 상한 (매 실행 최대로 소진 가정)</b></td><td class="n">—</td><td class="n">445,280</td><td class="n"><b>89%</b></td></tr>
+        </tbody>
+      </table>
+    </div>
+
+    <p class="note">
+      마지막 줄이 이 설계의 보증입니다. 매 실행 예산을 남김없이 써도 한 달 누적이
+      44.5만 자에서 멈춰, 무료 한도 50만 자를 넘지 않습니다. arXiv가 API를 주든
+      RSS로 대체되든 사용량이 한도를 넘길 수 없다는 뜻입니다.
     </p>
 
     <div class="t-scroll">
@@ -772,7 +800,7 @@ data=[(<span class="k">"text"</span>, t) <span class="k">for</span> t <span clas
           <tr><td class="m">실행</td><td class="m">GitHub Actions</td><td>크론 스케줄러 겸 러너. Private 저장소 무료 한도 월 2,000분 중 약 60분 사용.</td></tr>
           <tr><td class="m">수집</td><td class="m">requests + feedparser</td><td>HTTP 취득과 RSS/Atom 파싱을 분리. UA 위장과 타임아웃 제어를 위해.</td></tr>
           <tr><td class="m">설정</td><td class="m">PyYAML</td><td>소스 정의를 코드 밖으로 분리. sources.yml만 고치면 워크플로는 그대로.</td></tr>
-          <tr><td class="m">번역</td><td class="m">DeepL API Free</td><td>영문 제목만 한글로. 월 50만 자 무료이고 현재 사용량은 월 약 37만 자입니다.</td></tr>
+          <tr><td class="m">번역</td><td class="m">DeepL API Free</td><td>영문 제목만 한글로. 월 50만 자 무료. 실행 전 <code>/v2/usage</code>로 남은 한도를 조회해 예산 안에서만 씁니다.</td></tr>
           <tr><td class="m">전달</td><td class="m">Telegram Bot API</td><td>sendMessage 단방향. 봇 폴링과 충돌하지 않습니다.</td></tr>
           <tr><td class="m">보관</td><td class="m">git</td><td>브리프와 중복 기록의 저장소이자 버전 이력.</td></tr>
           <tr><td class="m">비밀</td><td class="m">Actions Secrets</td><td>봇 토큰, chat_id, DeepL 키. 로그에는 <code>***</code>로 마스킹됩니다.</td></tr>

@@ -9,6 +9,7 @@
 
 from __future__ import annotations
 
+import calendar
 import html
 import json
 import os
@@ -32,6 +33,7 @@ USER_AGENT = "daily-brief-bot/1.0 (+https://github.com/jeong7-ux/daily-brief)"
 ARXIV_API = "http://export.arxiv.org/api/query"
 ARXIV_RSS = "https://rss.arxiv.org/rss/"
 DEEPL_API = "https://api-free.deepl.com/v2/translate"
+DEEPL_USAGE = "https://api-free.deepl.com/v2/usage"
 DEEPL_BATCH = 50  # DeepL이 한 요청에 받는 최대 텍스트 수
 TELEGRAM_CHUNK = 3500  # 텔레그램 한도는 4096자. 여유를 둠.
 SEEN_RETENTION_DAYS = 30
@@ -365,24 +367,112 @@ def translate_batch(texts: list[str], api_key: str) -> list[str] | None:
     return [t["text"] for t in translations]
 
 
-def translate_titles(sections: list[tuple[dict, list[dict]]], api_key: str) -> None:
-    """영문 제목에 title_ko를 채웁니다. 실패해도 발송은 그대로 진행됩니다."""
-    targets = [
-        item
-        for _, items in sections
-        for item in items
-        if needs_translation(item["title"])
-    ]
-    if not targets:
+def deepl_usage(api_key: str) -> tuple[int, int] | None:
+    """(사용량, 한도)를 돌려줍니다. 조회에 실패하면 None."""
+    try:
+        resp = requests.get(
+            DEEPL_USAGE,
+            headers={"Authorization": f"DeepL-Auth-Key {api_key}", "User-Agent": USER_AGENT},
+            timeout=30,
+        )
+        resp.raise_for_status()
+        data = resp.json()
+        return int(data["character_count"]), int(data["character_limit"])
+    except (requests.RequestException, ValueError, KeyError, TypeError) as exc:
+        log(f"  ! DeepL 사용량 조회 실패: {exc}")
+        return None
+
+
+def run_budget(api_key: str, tcfg: dict, now: datetime) -> tuple[int, int]:
+    """(hard_cap, slice_budget)을 돌려줍니다.
+
+    hard_cap    남은 한도에서 예약분을 뺀 절대 상한. 이걸 지키는 한 456을
+                만날 일이 없습니다.
+    slice_budget 남은 한도를 이번 달 남은 실행 횟수로 나눈 균등 배분.
+                월초에 몰아 쓰고 월말에 굶는 것을 막습니다.
+
+    둘을 나눈 이유는 우선순위 때문입니다. 텔레그램에 보이는 항목은 실행당
+    1천 자도 안 되므로 균등 배분에 묶을 이유가 없고, 오히려 한도가 찰수록
+    배분이 제목 한 줄보다 작아져 정작 읽는 부분이 번역되지 않습니다.
+    """
+    fallback = int(tcfg.get("fallback_chars_per_run", 1500))
+    usage = deepl_usage(api_key)
+    if usage is None:
+        log(f"  사용량을 몰라 보수적으로 {fallback:,}자만 번역합니다")
+        return fallback, fallback
+
+    used, limit = usage
+    reserve = limit * float(tcfg.get("monthly_reserve_ratio", 0.10))
+    hard_cap = max(0, int(limit - reserve - used))
+
+    days_left = calendar.monthrange(now.year, now.month)[1] - now.day + 1
+    runs_left = max(1, days_left * int(tcfg.get("runs_per_day", 2)))
+    slice_budget = hard_cap // runs_left
+
+    pct = 100 * used / limit if limit else 0
+    log(f"  DeepL 사용량: {used:,}/{limit:,}자 ({pct:.1f}%)")
+    log(f"  남은 가용 {hard_cap:,}자 / 남은 실행 {runs_left}회 -> 배분 {slice_budget:,}자")
+    return hard_cap, slice_budget
+
+
+def translate_titles(
+    sections: list[tuple[dict, list[dict]]],
+    api_key: str,
+    tg_limit: int,
+    tcfg: dict,
+    now: datetime,
+) -> None:
+    """영문 제목에 title_ko를 채웁니다. 실패해도 발송은 그대로 진행됩니다.
+
+    텔레그램에 실제로 보이는 항목을 먼저 번역합니다. 나머지는 마크다운
+    보관본에만 남는 항목이라, 한도에 여유가 있을 때만 처리합니다.
+    """
+    visible: list[dict] = []
+    hidden: list[dict] = []
+    for _, items in sections:
+        for idx, item in enumerate(items):
+            if needs_translation(item["title"]):
+                (visible if idx < tg_limit else hidden).append(item)
+
+    if not tcfg.get("translate_hidden", True):
+        hidden = []
+    if not visible and not hidden:
         log("번역할 영문 제목이 없습니다")
         return
 
-    chars = sum(len(i["title"]) for i in targets)
-    log(f"번역 대상: {len(targets)}건 / {chars:,}자")
+    log(f"번역 대상: 보이는 {len(visible)}건 + 보관용 {len(hidden)}건")
+    hard_cap, slice_budget = run_budget(api_key, tcfg, now)
+    if hard_cap <= 0:
+        log("  남은 한도가 없어 이번 실행은 원문으로 발송합니다")
+        return
+
+    picked: list[dict] = []
+    spend = 0
+
+    # 1) 보이는 항목은 절대 상한 안에서 전부 처리합니다.
+    for item in visible:
+        size = len(item["title"])
+        if spend + size > hard_cap:
+            break
+        picked.append(item)
+        spend += size
+
+    # 2) 보관용 항목은 균등 배분 안에서만. 우선순위를 지키려고 뒤쪽의 짧은
+    #    항목을 끼워 넣지 않고 한도에 닿는 즉시 멈춥니다.
+    for item in hidden:
+        size = len(item["title"])
+        if spend + size > hard_cap or spend + size > slice_budget:
+            break
+        picked.append(item)
+        spend += size
+
+    skipped = len(visible) + len(hidden) - len(picked)
+    if skipped:
+        log(f"  예산 내 {len(picked)}건({spend:,}자)만 번역 — {skipped}건은 원문 유지")
 
     done = 0
-    for start in range(0, len(targets), DEEPL_BATCH):
-        chunk = targets[start : start + DEEPL_BATCH]
+    for start in range(0, len(picked), DEEPL_BATCH):
+        chunk = picked[start : start + DEEPL_BATCH]
         result = translate_batch([i["title"] for i in chunk], api_key)
         if result is None:
             break  # 한 배치가 실패하면 나머지도 실패할 가능성이 높습니다.
@@ -392,7 +482,7 @@ def translate_titles(sections: list[tuple[dict, list[dict]]], api_key: str) -> N
                 item["title_ko"] = ko.strip()
                 done += 1
 
-    log(f"  번역 완료: {done}건")
+    log(f"  번역 완료: {done}건 / {spend:,}자")
 
 
 # --------------------------------------------------------------------------- 렌더링
@@ -531,7 +621,7 @@ def main() -> int:
     # 번역은 있으면 좋은 기능입니다. 실패해도 원문 그대로 발송을 계속합니다.
     deepl_key = os.environ.get("DEEPL_API_KEY", "").strip()
     if deepl_key:
-        translate_titles(sections, deepl_key)
+        translate_titles(sections, deepl_key, tg_limit, config.get("translation", {}), now)
     else:
         log("DEEPL_API_KEY가 없어 번역을 건너뜁니다")
 
