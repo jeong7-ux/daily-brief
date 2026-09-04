@@ -18,6 +18,11 @@ TRENDING_LIMIT = 5
 RECENT_LIMIT = 3
 RECENT_MIN_STARS = 5
 
+HF_TRENDING_LIMIT = 5
+HF_RECENT_LIMIT = 3
+HF_RECENT_WINDOW_DAYS = 14
+HF_TRENDING_POOL = 100
+
 
 def fetch_trending(limit=TRENDING_LIMIT):
     """github.com/trending 일간 급상승 순위를 스크래핑."""
@@ -73,6 +78,45 @@ def fetch_recent(limit=RECENT_LIMIT, min_stars=RECENT_MIN_STARS):
         }
         for it in items
     ]
+
+
+def _hf_model_item(model):
+    return {
+        "name": model["id"],
+        "url": f"https://huggingface.co/{model['id']}",
+        "description": model.get("pipeline_tag") or "",
+        "likes": model.get("likes", 0),
+        "downloads": model.get("downloads", 0),
+    }
+
+
+def fetch_hf_trending(limit=HF_TRENDING_LIMIT):
+    """huggingface.co 트렌딩 스코어 기준 상위 모델."""
+    resp = requests.get(
+        "https://huggingface.co/api/models",
+        params={"sort": "trendingScore", "direction": -1, "limit": limit},
+        timeout=15,
+    )
+    resp.raise_for_status()
+    return [_hf_model_item(m) for m in resp.json()]
+
+
+def fetch_hf_recent_trending(limit=HF_RECENT_LIMIT, window_days=HF_RECENT_WINDOW_DAYS, pool=HF_TRENDING_POOL):
+    """업로드량이 압도적으로 많아 '방금 등록 + 좋아요'로는 결과가 거의 없으므로,
+    트렌딩 중인 모델 중 최근 window_days 이내에 등록된 것만 최신순으로 뽑는다."""
+    resp = requests.get(
+        "https://huggingface.co/api/models",
+        params={"sort": "trendingScore", "direction": -1, "limit": pool},
+        timeout=15,
+    )
+    resp.raise_for_status()
+    cutoff = datetime.now(timezone.utc) - timedelta(days=window_days)
+    candidates = [
+        m for m in resp.json()
+        if datetime.fromisoformat(m["createdAt"].replace("Z", "+00:00")) > cutoff
+    ]
+    candidates.sort(key=lambda m: m["createdAt"], reverse=True)
+    return [_hf_model_item(m) for m in candidates[:limit]]
 
 
 def deepl_endpoint():
@@ -144,6 +188,9 @@ def main():
     recent = fetch_recent()
     attach_translations(trending + recent)
 
+    hf_trending = fetch_hf_trending()
+    hf_recent = fetch_hf_recent_trending()
+
     lines = ["<b>\U0001F525 오늘의 GitHub 트렌딩 TOP 5</b>"]
     lines += [format_line(i, r, r["stars_today"]) for i, r in enumerate(trending, 1)]
 
@@ -151,8 +198,19 @@ def main():
     lines.append(f"<b>\U0001F195 최근 등록된 저장소 (★{RECENT_MIN_STARS}+) TOP 3</b>")
     lines += [format_line(i, r, f"★{r['stars']}") for i, r in enumerate(recent, 1)]
 
+    lines.append("")
+    lines.append("<b>\U0001F917 오늘의 HuggingFace 트렌딩 모델 TOP 5</b>")
+    lines += [format_line(i, r, f"\U0001F44D{r['likes']} ⬇{r['downloads']:,}") for i, r in enumerate(hf_trending, 1)]
+
+    lines.append("")
+    lines.append(f"<b>\U0001F195 최근 {HF_RECENT_WINDOW_DAYS}일 이내 등록된 주목받는 모델 TOP 3</b>")
+    lines += [format_line(i, r, f"\U0001F44D{r['likes']} ⬇{r['downloads']:,}") for i, r in enumerate(hf_recent, 1)]
+
     send_telegram("\n".join(lines))
-    print(f"트렌딩 {len(trending)}개, 신규 저장소 {len(recent)}개 전송 완료.")
+    print(
+        f"GitHub 트렌딩 {len(trending)}개, 신규 저장소 {len(recent)}개, "
+        f"HF 트렌딩 {len(hf_trending)}개, HF 신규 {len(hf_recent)}개 전송 완료."
+    )
 
 
 if __name__ == "__main__":
