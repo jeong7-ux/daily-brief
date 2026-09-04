@@ -1,9 +1,8 @@
-# 텔레그램 뉴스/요약 봇
+# 텔레그램 뉴스 다이제스트 봇
 
-텔레그램 봇 하나(`@treewind_wiki_news_bot`)로 두 가지를 합니다.
-
-- **URL 보내면 요약**: 대화방에 링크를 보내면 본문을 긁어와 OpenRouter LLM으로 요약해 답장 (`bot.py`, PC에서 직접 실행해야 동작)
-- **주기적 자동 발송**: GitHub Actions가 정해진 주기로 뉴스/트렌드를 모아 먼저 말을 걸어옴 (PC 꺼져 있어도 동작)
+텔레그램 봇 하나(`@treewind_wiki_news_bot`)가 GitHub Actions 스케줄에 맞춰 뉴스/트렌드를
+모아 요약해 먼저 말을 걸어옵니다. 전부 GitHub 클라우드에서 실행되므로 PC를 켜 둘 필요가
+없습니다.
 
 아키텍처와 데이터 흐름도는 [docs/architecture.md](docs/architecture.md)에 정리되어 있습니다.
 
@@ -34,7 +33,7 @@
 ```bash
 gh secret set TELEGRAM_BOT_TOKEN
 gh secret set TELEGRAM_CHAT_ID
-gh secret set OPENROUTER_API_KEY   # hada-news / jtbc-news / ai-news / bot.py에 필요
+gh secret set OPENROUTER_API_KEY   # hada-news / jtbc-news / ai-news에 필요
 gh secret set DEEPL_API_KEY        # 선택 — github-daily 번역용, 없으면 원문만 발송
 ```
 
@@ -47,28 +46,6 @@ gh workflow run ai-news.yml
 gh workflow run github-daily.yml
 gh run watch
 ```
-
-## 로컬에서 대화형 봇(bot.py) 실행
-
-```bash
-python -m venv .venv
-.venv/Scripts/python -m pip install -r requirements.txt   # Windows
-```
-
-`.env` 파일에 아래 값을 채운 뒤 실행합니다.
-
-```
-TELEGRAM_BOT_TOKEN=...
-OPENROUTER_API_KEY=...
-OPENROUTER_MODEL=nvidia/nemotron-3-ultra-550b-a55b:free
-```
-
-```bash
-.venv/Scripts/python bot.py
-```
-
-콘솔을 닫거나 PC가 꺼지면 멈춥니다. 24시간 상시 응답이 필요하면 서버/VPS 등
-항상 켜진 곳에 배포해야 합니다.
 
 ## 중복 방지
 

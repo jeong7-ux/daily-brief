@@ -1,24 +1,14 @@
 # 아키텍처
 
-이 저장소는 텔레그램 봇 하나(`@treewind_wiki_news_bot`)를 통해 두 갈래로 정보를 전달합니다.
-
-1. **`bot.py`** — 사용자가 URL을 보내면 즉시 요약해 답장하는 대화형 봇 (이 PC에서 직접 실행해야 함)
-2. **GitHub Actions 4종** — 정해진 주기로 뉴스/트렌드를 수집·요약해 먼저 말을 걸어오는 자동 발송 봇 (PC 꺼져 있어도 동작)
-
-두 갈래 모두 같은 텔레그램 봇, 같은 채팅(`TELEGRAM_CHAT_ID`)으로 보냅니다.
+이 저장소는 텔레그램 봇 하나(`@treewind_wiki_news_bot`)가 **GitHub Actions 4종**으로
+정해진 주기에 뉴스/트렌드를 수집·요약해 먼저 말을 걸어오는 구조입니다. 전부 GitHub
+클라우드에서 실행되므로 PC가 꺼져 있어도 동작하며, 같은 텔레그램 봇·같은 채팅
+(`TELEGRAM_CHAT_ID`)으로 보냅니다.
 
 ## 전체 흐름도
 
 ```mermaid
 flowchart TB
-    subgraph interactive["대화형 · bot.py (로컬 PC에서만 동작)"]
-        direction LR
-        U1["사용자가 URL 전송"] --> BOT["bot.py\ntelebot.infinity_polling()"]
-        BOT --> EX1["BeautifulSoup\n본문 추출"]
-        EX1 --> LLM1["OpenRouter LLM\n요약"]
-        LLM1 --> BOT
-    end
-
     subgraph actions["자동 발송 · GitHub Actions (PC 불필요)"]
         direction TB
 
@@ -58,7 +48,6 @@ flowchart TB
     J5 --> TG
     A6 --> TG
     G6 --> TG
-    LLM1 -.-> TG
 
     TG --> USER["사용자 텔레그램 채팅"]
 ```
@@ -67,7 +56,6 @@ flowchart TB
 
 | 이름 | 트리거 | 스크립트 | 소스 | 요약 방식 | 상태 파일 |
 |---|---|---|---|---|---|
-| 대화형 봇 | 사용자가 URL 전송 (상시 폴링, PC 필요) | `bot.py` | 사용자가 보낸 임의 URL | OpenRouter LLM | 없음 |
 | hada-news | KST 매일 07:00, 19:00 | `scripts/fetch_hada_news.py` | [news.hada.io](https://news.hada.io) (GeekNews) RSS | 원문 스크래핑 후 OpenRouter 요약 | `state/seen_hada.json` |
 | jtbc-news | 30분마다 | `scripts/fetch_jtbc_news.py` | JTBC 속보 RSS | RSS 리드문단을 OpenRouter 요약 | `state/seen_jtbc.json` |
 | ai-news | 2시간마다 | `scripts/fetch_ai_news.py` | 더에이아이(newstheai.com) 인기뉴스 RSS | 원문 스크래핑 후 OpenRouter 요약 | `state/seen_ai_news.json` |
@@ -111,7 +99,7 @@ flowchart TB
 |---|---|
 | `TELEGRAM_BOT_TOKEN` | 전 구성 요소 공통 |
 | `TELEGRAM_CHAT_ID` | 전 구성 요소 공통 |
-| `OPENROUTER_API_KEY` | bot.py, hada-news, jtbc-news, ai-news |
+| `OPENROUTER_API_KEY` | hada-news, jtbc-news, ai-news |
 | `DEEPL_API_KEY` | github-daily (선택 — 없으면 번역 없이 원문만 발송) |
 
 `GITHUB_TOKEN`은 GitHub Actions가 자동으로 제공하는 시크릿으로, github-daily에서
@@ -119,9 +107,6 @@ Search API 호출 한도를 높이는 데만 쓰이고 별도 등록이 필요 �
 
 ## 알려진 제약
 
-- **`bot.py`는 이 PC가 켜져 있고 콘솔에서 직접 실행 중일 때만 동작합니다.** 재부팅/절전/터미널
-  종료 시 멈추며, 자동 재시작 설정은 되어 있지 않습니다. 그 사이 온 메시지는 텔레그램 서버에
-  큐잉되어 있다가 봇이 다시 켜지면 처리됩니다.
 - GitHub Actions 스케줄은 부하에 따라 수 분~수십 분 밀릴 수 있습니다(정시 도착 보장 안 됨).
 - ai-news, jtbc-news의 중복 제거는 제목 문자열 유사도(`difflib.SequenceMatcher`, 임계값 0.6)
   기반이라 완전히 다른 표현의 같은 사건은 걸러지지 않을 수 있습니다.
