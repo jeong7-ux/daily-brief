@@ -5,6 +5,11 @@
 클라우드에서 실행되므로 PC가 꺼져 있어도 동작하며, 같은 텔레그램 봇·같은 채팅
 (`TELEGRAM_CHAT_ID`)으로 보냅니다.
 
+저장소는 **public**입니다. GitHub Actions는 public 저장소에서 표준 러너 기준 실행
+시간이 완전 무료(무제한)라, 실행 빈도 때문에 과금될 걱정 없이 자유롭게 스케줄을
+잡을 수 있습니다. (private였다면 월 2,000분 무료 한도가 있어 `jtbc-news`처럼
+잦은 워크플로우가 한도에 걸릴 수 있었습니다.)
+
 ## 전체 흐름도
 
 ```mermaid
@@ -19,7 +24,7 @@ flowchart TB
             H4 --> H5["OpenRouter 요약"]
         end
 
-        subgraph jtbc["jtbc-news.yml · 30분마다"]
+        subgraph jtbc["jtbc-news.yml · 1시간마다 (매시 정각)"]
             J1["JTBC 속보 RSS"] --> J2["새 글만 필터\n(state/seen_jtbc.json)"]
             J2 --> J3["제목 유사도로\n중복 속보 제거"]
             J3 --> J4["상위 5건"]
@@ -57,7 +62,7 @@ flowchart TB
 | 이름 | 트리거 | 스크립트 | 소스 | 요약 방식 | 상태 파일 |
 |---|---|---|---|---|---|
 | hada-news | KST 매일 07:00, 19:00 | `scripts/fetch_hada_news.py` | [news.hada.io](https://news.hada.io) (GeekNews) RSS | 원문 스크래핑 후 OpenRouter 요약 | `state/seen_hada.json` |
-| jtbc-news | 30분마다 | `scripts/fetch_jtbc_news.py` | JTBC 속보 RSS | RSS 리드문단을 OpenRouter 요약 | `state/seen_jtbc.json` |
+| jtbc-news | 1시간마다 | `scripts/fetch_jtbc_news.py` | JTBC 속보 RSS | RSS 리드문단을 OpenRouter 요약 | `state/seen_jtbc.json` |
 | ai-news | 2시간마다 | `scripts/fetch_ai_news.py` | 더에이아이(newstheai.com) 인기뉴스 RSS | 원문 스크래핑 후 OpenRouter 요약 | `state/seen_ai_news.json` |
 | github-daily | KST 매일 00:00 | `scripts/fetch_github_daily.py` | GitHub Trending, GitHub Search API, HuggingFace API | 요약 없음(트렌딩 목록), DeepL로 설명 번역 | 없음(중복 방지 불필요) |
 
@@ -110,3 +115,23 @@ Search API 호출 한도를 높이는 데만 쓰이고 별도 등록이 필요 �
 - GitHub Actions 스케줄은 부하에 따라 수 분~수십 분 밀릴 수 있습니다(정시 도착 보장 안 됨).
 - ai-news, jtbc-news의 중복 제거는 제목 문자열 유사도(`difflib.SequenceMatcher`, 임계값 0.6)
   기반이라 완전히 다른 표현의 같은 사건은 걸러지지 않을 수 있습니다.
+
+## 변경 기록
+
+- **2026-09-04**: 기존 RSS/arXiv 일간 브리핑 파이프라인(`collect.py`, `daily-brief.yml`,
+  `briefs/`, `sources.yml`)을 전부 제거하고, URL 요약 대화형 봇(`bot.py`)으로 전환
+- **2026-09-04**: `hada-news`(GeekNews) 추가 — 이후 원문 스크래핑 + OpenRouter 요약,
+  실행 시각을 KST 07:00/19:00으로 조정
+- **2026-09-04**: `github-daily` 추가 — GitHub 트렌딩 TOP5 + 신규 저장소 TOP3, 이후
+  DeepL 번역 병기와 HuggingFace 트렌딩 모델 섹션(TOP5 + 최근 14일 TOP3) 추가
+- **2026-09-04**: `jtbc-news`(JTBC 속보) 추가 — 제목 유사도 중복 제거 + 상위 5건 요약
+- **2026-09-04**: `ai-news`(더에이아이 인기뉴스) 추가 — 동일하게 중복 제거 + 상위 5건
+  원문 요약
+- **2026-09-04**: 전체 점검 후 두 가지 버그 수정 — 워크플로우 동시 실행 시 `git push`
+  경합, seen 상태 트리밍 시 순서 미보장(set → list)
+- **2026-09-04**: PC 상시 실행이 필요했던 `bot.py`(URL 요약 대화형 봇) 제거. 이제
+  전부 GitHub Actions 4종만으로 구성되어 PC 상태와 무관하게 동작
+- **2026-09-05**: private 저장소의 GitHub Actions 월 2,000분 무료 한도에 근접할
+  것으로 추산되어(`jtbc-news`의 잦은 실행이 주요 원인) 저장소를 **public으로 전환**.
+  이에 따라 Actions 실행 시간이 완전 무료가 되어, 비용 절감을 위해 낮췄던 `jtbc-news`
+  주기(30분 → 1시간)는 필요시 원래대로 되돌릴 수 있음
