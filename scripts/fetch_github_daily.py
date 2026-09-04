@@ -8,6 +8,7 @@ from bs4 import BeautifulSoup
 TELEGRAM_BOT_TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN")
 TELEGRAM_CHAT_ID = os.environ.get("TELEGRAM_CHAT_ID")
 GITHUB_TOKEN = os.environ.get("GITHUB_TOKEN")
+DEEPL_API_KEY = os.environ.get("DEEPL_API_KEY")
 
 BROWSER_HEADERS = {
     "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0 Safari/537.36",
@@ -74,8 +75,50 @@ def fetch_recent(limit=RECENT_LIMIT, min_stars=RECENT_MIN_STARS):
     ]
 
 
+def deepl_endpoint():
+    is_free_key = DEEPL_API_KEY and DEEPL_API_KEY.endswith(":fx")
+    return "https://api-free.deepl.com/v2/translate" if is_free_key else "https://api.deepl.com/v2/translate"
+
+
+def translate_batch(texts):
+    """DeepL로 일괄 번역. 키가 없거나 실패하면 None을 반환해 원문 유지를 유도."""
+    if not DEEPL_API_KEY or not texts:
+        return None
+    try:
+        resp = requests.post(
+            deepl_endpoint(),
+            headers={"Authorization": f"DeepL-Auth-Key {DEEPL_API_KEY}"},
+            data=[("text", t) for t in texts] + [("target_lang", "KO")],
+            timeout=20,
+        )
+        resp.raise_for_status()
+        translations = resp.json().get("translations", [])
+        if len(translations) != len(texts):
+            return None
+        return [t["text"] for t in translations]
+    except Exception:
+        return None
+
+
+def attach_translations(items):
+    """설명이 있는 항목만 모아 한 번의 요청으로 번역하고 결과를 병기용으로 붙인다."""
+    idxs = [i for i, it in enumerate(items) if it["description"]]
+    translated = translate_batch([items[i]["description"] for i in idxs])
+    if not translated:
+        return
+    for i, ko in zip(idxs, translated):
+        items[i]["description_ko"] = ko
+
+
 def format_line(index, item, star_label):
-    desc = f" - {html.escape(item['description'])}" if item["description"] else ""
+    original = item["description"]
+    ko = item.get("description_ko")
+    if ko and ko.strip() and ko.strip() != original.strip():
+        desc = f" - {html.escape(ko)} ({html.escape(original)})"
+    elif original:
+        desc = f" - {html.escape(original)}"
+    else:
+        desc = ""
     return f"{index}. <a href=\"{item['url']}\">{html.escape(item['name'])}</a> ({star_label}){desc}"
 
 
@@ -99,6 +142,7 @@ def main():
 
     trending = fetch_trending()
     recent = fetch_recent()
+    attach_translations(trending + recent)
 
     lines = ["<b>\U0001F525 오늘의 GitHub 트렌딩 TOP 5</b>"]
     lines += [format_line(i, r, r["stars_today"]) for i, r in enumerate(trending, 1)]
