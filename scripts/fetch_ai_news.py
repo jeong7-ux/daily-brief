@@ -29,12 +29,12 @@ BROWSER_HEADERS = {
 def load_seen():
     if not STATE_PATH.exists():
         return None  # None marks "first run, never seeded"
-    return set(json.loads(STATE_PATH.read_text(encoding="utf-8")))
+    return json.loads(STATE_PATH.read_text(encoding="utf-8"))  # 등록 순서를 유지하는 리스트
 
 
 def save_seen(seen_ids):
     STATE_PATH.parent.mkdir(parents=True, exist_ok=True)
-    trimmed = list(seen_ids)[-MAX_SEEN:]
+    trimmed = seen_ids[-MAX_SEEN:]  # 오래된 것부터 잘라내 최신 항목을 보존
     STATE_PATH.write_text(json.dumps(trimmed, ensure_ascii=False, indent=2), encoding="utf-8")
 
 
@@ -140,7 +140,7 @@ def main():
     seen = load_seen()
     first_run = seen is None
     if first_run:
-        seen = set()
+        seen = []
 
     new_entries = [e for e in entries if e.link not in seen]
 
@@ -158,7 +158,8 @@ def main():
         print(f"새 글 {len(new_entries)}개 중 중복 제거 후 {len(deduped)}개 전송 완료.")
 
     for e in entries:
-        seen.add(e.link)
+        if e.link not in seen:
+            seen.append(e.link)
     save_seen(seen)
 
 

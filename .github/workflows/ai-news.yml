@@ -31,5 +31,12 @@ jobs:
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
           git add state/seen_ai_news.json
-          git diff --cached --quiet || git commit -m "chore: ai-news seen 상태 갱신"
-          git push
+          git diff --cached --quiet && exit 0
+          git commit -m "chore: ai-news seen 상태 갱신"
+          for i in 1 2 3 4 5; do
+            git push && exit 0
+            git fetch origin main
+            git rebase origin/main
+            sleep $((RANDOM % 5 + 1))
+          done
+          exit 1
